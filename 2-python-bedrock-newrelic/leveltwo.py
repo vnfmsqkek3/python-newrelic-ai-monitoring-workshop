@@ -37,7 +37,7 @@ import nr_bedrock_observability
 nr_bedrock_observability.enable_auto_patch(application_name=APP_NAME)
 
 from nr_bedrock_observability import (
-    create_streamlit_evaluation_ui,
+    create_evaluation_ui,
     create_streamlit_nrql_queries,
     get_streamlit_session_info,
 )
@@ -631,8 +631,8 @@ if (st.session_state.messages and
     st.markdown("---")
     
     # 라이브러리의 자동 평가 UI 사용 (New Relic 전송 포함)
-    create_streamlit_evaluation_ui(
-        # trace_id와 completion_id는 라이브러리가 자동으로 관리
+    create_evaluation_ui(
+        eval_key="main_evaluation",  # 필수 파라미터
         model_id=AVAILABLE_MODELS[st.session_state.selected_model_key],
         response_time_ms=st.session_state.last_response_data.get("response_time_ms"),
         total_tokens=st.session_state.last_response_data.get("total_tokens"),
