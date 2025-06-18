@@ -17,9 +17,16 @@ from concurrent.futures import ThreadPoolExecutor
 import numpy as np
 
 # 상수 (라이브러리 import 전에 정의)
-REGION = "ap-northeast-2"
-MODEL_ID = "anthropic.claude-3-5-sonnet-20240620-v1:0"
+REGION = "us-west-2"
 APP_NAME = "gen-ai-bedrock-late"
+
+# 사용 가능한 모델 목록
+# 주의: 정확한 모델 ID는 AWS Bedrock 콘솔에서 확인해주세요
+AVAILABLE_MODELS = {
+    "Claude 3 Sonnet": "anthropic.claude-3-sonnet-20240229-v1:0",
+    "Claude 3.5 Sonnet": "anthropic.claude-3-5-sonnet-20240620-v1:0"
+}
+DEFAULT_MODEL_KEY = "Claude 3 Sonnet"  # 기본 모델
 
 # import nr_bedrock_observability 및 즉시 auto patch 활성화
 import nr_bedrock_observability
@@ -78,6 +85,10 @@ if "delay_before_llm" not in st.session_state:
     st.session_state.delay_before_llm = True
 if "delay_after_llm" not in st.session_state:
     st.session_state.delay_after_llm = False
+
+# 모델 선택 세션 상태
+if "selected_model" not in st.session_state:
+    st.session_state.selected_model = DEFAULT_MODEL_KEY
 
 # 🐌 지연 함수들
 def simple_sleep_delay(duration: float):
@@ -318,6 +329,41 @@ with sidebar_col:
     
     st.markdown("---")
     
+    # 모델 선택
+    st.subheader("🤖 모델 선택")
+    
+    model_keys = list(AVAILABLE_MODELS.keys())
+    current_index = model_keys.index(st.session_state.selected_model) if st.session_state.selected_model in model_keys else 0
+    
+    selected_model = st.selectbox(
+        "모델 선택:",
+        options=model_keys,
+        index=current_index,
+        help="사용할 AI 모델을 선택하세요"
+    )
+    
+    # 선택된 모델이 변경되었으면 업데이트
+    if selected_model != st.session_state.selected_model:
+        st.session_state.selected_model = selected_model
+        st.rerun()
+    
+    # 선택된 모델 정보 표시
+    selected_model_id = AVAILABLE_MODELS[st.session_state.selected_model]
+    with st.expander("🔍 선택된 모델 정보", expanded=False):
+        st.code(f"모델명: {st.session_state.selected_model}")
+        st.code(f"모델 ID: {selected_model_id}")
+        
+        # 모델별 간단한 설명 추가
+        model_descriptions = {
+            "Claude 3 Sonnet": "균형잡힌 성능의 Claude 3 모델 - 안정적이고 신뢰할 수 있음",
+            "Claude 3.5 Sonnet": "Claude 3.5 고성능 모델 - 향상된 추론 능력과 정확성"
+        }
+        
+        if st.session_state.selected_model in model_descriptions:
+            st.markdown(f"**설명:** {model_descriptions[st.session_state.selected_model]}")
+    
+    st.markdown("---")
+    
     # 모델 파라미터 설정
     st.header("모델 파라미터 설정")
     
@@ -445,6 +491,8 @@ with sidebar_col:
     
     # 현재 설정 표시
     with st.expander("📋 현재 설정", expanded=False):
+        st.write(f"**선택된 모델:** {st.session_state.selected_model}")
+        st.write(f"**모델 ID:** {selected_model_id}")
         combined_prompt = f"{st.session_state.user_role_prompt}\n\n{st.session_state.user_system_prompt}"
         st.code(combined_prompt)
         st.write(f"Temperature: {st.session_state.user_temperature}")
@@ -524,10 +572,13 @@ with main_col:
                     # 시스템 프롬프트 구성
                     combined_system_prompt = f"{st.session_state.user_role_prompt}\n\n{st.session_state.user_system_prompt}"
                     
-                    # Bedrock API 호출
+                    # 선택된 모델 ID 가져오기
+                    current_model_id = AVAILABLE_MODELS[st.session_state.selected_model]
+                    
+                    # Bedrock API 호출 (Claude 모델)
                     llm_start_time = time.time()
                     response = bedrock_client.invoke_model(
-                        modelId=MODEL_ID,
+                        modelId=current_model_id,
                         body=json.dumps({
                             "anthropic_version": "bedrock-2023-05-31",
                             "max_tokens": 1000,
@@ -553,7 +604,7 @@ with main_col:
                     # 응답 처리 (라이브러리가 자동으로 텍스트 추출 및 New Relic 전송)
                     response_body = json.loads(response['body'].read().decode('utf-8'))
                     
-                    # 응답 텍스트 추출 (fallback)
+                    # 응답 텍스트 추출 (Claude 모델)
                     assistant_response = ""
                     if 'content' in response_body:
                         content = response_body['content']
@@ -567,6 +618,10 @@ with main_col:
                         
                         # 응답 데이터 저장 (평가 UI용) + 지연 정보 포함
                         usage = response_body.get("usage", {})
+                        total_tokens = usage.get("total_token_count", 0) or (usage.get("input_tokens", 0) + usage.get("output_tokens", 0))
+                        input_tokens = usage.get("input_token_count", 0) or usage.get("input_tokens", 0)
+                        output_tokens = usage.get("output_token_count", 0) or usage.get("output_tokens", 0)
+                        
                         total_duration = int((time.time() - start_time) * 1000)
                         llm_duration_ms = int(llm_duration * 1000)
                         
@@ -581,9 +636,9 @@ with main_col:
                             "response_time_ms": total_duration,
                             "llm_only_time_ms": llm_duration_ms,
                             "total_delay_ms": total_delay_ms,
-                            "total_tokens": usage.get("total_token_count", 0) or (usage.get("input_tokens", 0) + usage.get("output_tokens", 0)),
-                            "prompt_tokens": usage.get("input_token_count", 0) or usage.get("input_tokens", 0),
-                            "completion_tokens": usage.get("output_token_count", 0) or usage.get("output_tokens", 0),
+                            "total_tokens": total_tokens,
+                            "prompt_tokens": input_tokens,
+                            "completion_tokens": output_tokens,
                             "temperature": st.session_state.user_temperature,
                             "top_p": st.session_state.user_top_p,
                             **delay_info
@@ -606,6 +661,7 @@ with main_col:
                         
                     else:
                         st.error("응답을 추출할 수 없습니다.")
+                        st.write("Raw response:", response_body)  # 디버깅용
                         
                 except Exception as e:
                     st.error(f"오류: {str(e)}")
@@ -648,7 +704,7 @@ if (st.session_state.messages and
     # 라이브러리의 자동 평가 UI 사용 (New Relic 전송 포함)
     create_streamlit_evaluation_ui(
         # trace_id와 completion_id는 라이브러리가 자동으로 관리
-        model_id=MODEL_ID,
+        model_id=AVAILABLE_MODELS[st.session_state.selected_model],
         response_time_ms=st.session_state.last_response_data.get("response_time_ms"),
         total_tokens=st.session_state.last_response_data.get("total_tokens"),
         prompt_tokens=st.session_state.last_response_data.get("prompt_tokens"),

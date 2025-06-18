@@ -12,8 +12,15 @@ import uuid
 
 # 상수 (라이브러리 import 전에 정의)
 REGION = "us-west-2"
-MODEL_ID = "anthropic.claude-3-sonnet-20240229-v1:0"
 APP_NAME = "gen-ai-bedrock"
+
+# 사용 가능한 모델 목록
+# 주의: 정확한 모델 ID는 AWS Bedrock 콘솔에서 확인해주세요
+AVAILABLE_MODELS = {
+    "Claude 3 Sonnet": "anthropic.claude-3-sonnet-20240229-v1:0",
+    "Claude 3.5 Sonnet": "anthropic.claude-3-5-sonnet-20240620-v1:0",
+}
+DEFAULT_MODEL_KEY = "Claude 3 Sonnet"  # 기본 모델
 
 # New Relic 에이전트 초기화 - 설정 파일 명시적 지정
 import newrelic.agent
@@ -33,7 +40,6 @@ from nr_bedrock_observability import (
     create_streamlit_evaluation_ui,
     create_streamlit_nrql_queries,
     get_streamlit_session_info,
-    get_sample_nrql_queries
 )
 
 # 페이지 설정
@@ -70,6 +76,8 @@ if "raw_result" not in st.session_state:
     st.session_state.raw_result = {}
 if "message_count" not in st.session_state:
     st.session_state.message_count = 0
+if "selected_model_key" not in st.session_state:
+    st.session_state.selected_model_key = DEFAULT_MODEL_KEY
 
 
 @st.cache_resource
@@ -300,6 +308,37 @@ main_col, sidebar_col = st.columns([2, 1])
 with sidebar_col:
     st.header("⚙️ 설정")
     
+    # 🤖 모델 선택
+    st.subheader("🤖 모델 선택")
+    
+    # 모델 선택 드롭다운
+    model_names = list(AVAILABLE_MODELS.keys())
+    current_index = model_names.index(st.session_state.selected_model_key) if st.session_state.selected_model_key in model_names else 0
+    
+    selected_model_key = st.selectbox(
+        "사용할 Claude 모델:",
+        options=model_names,
+        index=current_index,
+        help="각 모델의 특성에 따라 응답 품질과 속도가 다를 수 있습니다"
+    )
+    
+    # 선택된 모델 업데이트
+    st.session_state.selected_model_key = selected_model_key
+    
+    # 선택된 모델 정보 표시
+    with st.expander("🔍 선택된 모델 정보", expanded=False):
+        selected_model_id = AVAILABLE_MODELS[st.session_state.selected_model_key]
+        st.code(f"Model ID: {selected_model_id}")
+        
+        # 모델별 특징 설명
+        model_descriptions = {
+            "Claude 3 Sonnet": "⚖️ **균형**: 성능과 효율성의 균형이 잘 잡힌 범용 모델",
+            "Claude 3.5 Sonnet": "🚀 **고성능**: 향상된 추론 능력과 정확성을 제공하는 최신 모델"
+        }
+        st.markdown(model_descriptions.get(st.session_state.selected_model_key, "모델 정보가 없습니다."))
+    
+    st.markdown("---")
+    
     # 모델 파라미터 설정
     st.header("모델 파라미터 설정")
     
@@ -427,10 +466,18 @@ with sidebar_col:
     
     # 현재 설정 표시
     with st.expander("📋 현재 설정", expanded=False):
+        # 선택된 모델 정보
+        st.write(f"**선택된 모델**: {st.session_state.selected_model_key}")
+        st.code(f"Model ID: {AVAILABLE_MODELS[st.session_state.selected_model_key]}")
+        
+        # 시스템 프롬프트
+        st.markdown("**System Prompt:**")
         combined_prompt = f"{st.session_state.user_role_prompt}\n\n{st.session_state.user_system_prompt}"
         st.code(combined_prompt)
-        st.write(f"Temperature: {st.session_state.user_temperature}")
-        st.write(f"Top-p: {st.session_state.user_top_p}")
+        
+        # 파라미터
+        st.write(f"**Temperature**: {st.session_state.user_temperature}")
+        st.write(f"**Top-p**: {st.session_state.user_top_p}")
     
     # 세션 정보 표시
     st.subheader("📊 세션 정보")
@@ -499,8 +546,12 @@ with main_col:
                     # 시스템 프롬프트 구성
                     combined_system_prompt = f"{st.session_state.user_role_prompt}\n\n{st.session_state.user_system_prompt}"
                     
+                    # 선택된 모델 ID 가져오기
+                    selected_model_id = AVAILABLE_MODELS[st.session_state.selected_model_key]
+                    
+                    # Bedrock API 호출 (Claude 모델)
                     response = bedrock_client.invoke_model(
-                        modelId=MODEL_ID,
+                        modelId=selected_model_id,
                         body=json.dumps({
                             "anthropic_version": "bedrock-2023-05-31",
                             "max_tokens": 1000,
@@ -519,7 +570,7 @@ with main_col:
                     # 응답 처리 (라이브러리가 자동으로 텍스트 추출 및 New Relic 전송)
                     response_body = json.loads(response['body'].read().decode('utf-8'))
                     
-                    # 응답 텍스트 추출 (fallback)
+                    # 응답 텍스트 추출 (Claude 모델)
                     assistant_response = ""
                     if 'content' in response_body:
                         content = response_body['content']
@@ -582,7 +633,7 @@ if (st.session_state.messages and
     # 라이브러리의 자동 평가 UI 사용 (New Relic 전송 포함)
     create_streamlit_evaluation_ui(
         # trace_id와 completion_id는 라이브러리가 자동으로 관리
-        model_id=MODEL_ID,
+        model_id=AVAILABLE_MODELS[st.session_state.selected_model_key],
         response_time_ms=st.session_state.last_response_data.get("response_time_ms"),
         total_tokens=st.session_state.last_response_data.get("total_tokens"),
         prompt_tokens=st.session_state.last_response_data.get("prompt_tokens"),
